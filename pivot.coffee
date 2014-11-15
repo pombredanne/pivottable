@@ -43,21 +43,21 @@ aggregatorTemplates =
         push: (record) -> @uniq.push(record[attr]) if record[attr] not in @uniq
         value: -> @uniq.length
         format: formatter
-        numInputs: 1
+        numInputs: if attr? then 0 else 1
 
     listUnique: (sep) -> ([attr]) -> (data, rowKey, colKey)  ->
         uniq: []
         push: (record) -> @uniq.push(record[attr]) if record[attr] not in @uniq
         value: -> @uniq.join sep
         format: (x) -> x
-        numInputs: 1
+        numInputs: if attr? then 0 else 1
 
     sum: (formatter=usFmt) -> ([attr]) -> (data, rowKey, colKey) ->
         sum: 0
         push: (record) -> @sum += parseFloat(record[attr]) if not isNaN parseFloat(record[attr])
         value: -> @sum
         format: formatter
-        numInputs: 1
+        numInputs: if attr? then 0 else 1
 
     average:  (formatter=usFmt) -> ([attr]) -> (data, rowKey, colKey) ->
         sum: 0
@@ -68,7 +68,7 @@ aggregatorTemplates =
                 @len++
         value: -> @sum/@len
         format: formatter
-        numInputs: 1
+        numInputs: if attr? then 0 else 1
 
     sumOverSum: (formatter=usFmt) -> ([num, denom]) -> (data, rowKey, colKey) ->
         sumNum: 0
@@ -78,7 +78,7 @@ aggregatorTemplates =
             @sumDenom += parseFloat(record[denom]) if not isNaN parseFloat(record[denom])
         value: -> @sumNum/@sumDenom
         format: formatter
-        numInputs: 2
+        numInputs: if num? and denom? then 0 else 2
 
     sumOverSumBound80: (upper=true, formatter=usFmt) -> ([num, denom]) -> (data, rowKey, colKey) ->
         sumNum: 0
@@ -92,7 +92,7 @@ aggregatorTemplates =
                 Math.sqrt(0.410593603787454/ (@sumDenom*@sumDenom) + (@sumNum*(1 - @sumNum/ @sumDenom))/ (@sumDenom*@sumDenom)))/
                 (1 + 1.642374415149816/@sumDenom)
         format: formatter
-        numInputs: 2
+        numInputs: if num? and denom? then 0 else 2
 
     fractionOf: (wrapped, type="total", formatter=usFmtPct) -> (x...) -> (data, rowKey, colKey) ->
         selector: {total:[[],[]],row:[rowKey,[]],col:[[],colKey]}[type]
@@ -578,13 +578,13 @@ $.fn.pivotUI = (input, inputOpts, overwrite = false, locale="en") ->
                 else
                     btns = $("<p>").appendTo(valueList)
                     btns.append $("<button>").html(opts.localeStrings.selectAll).bind "click", ->
-                        valueList.find("input").prop "checked", true
+                        valueList.find("input:visible").prop "checked", true
                     btns.append $("<button>").html(opts.localeStrings.selectNone).bind "click", ->
-                        valueList.find("input").prop "checked", false
+                        valueList.find("input:visible").prop "checked", false
                     btns.append $("<input>").addClass("pvtSearch").attr("placeholder", opts.localeStrings.filterResults).bind "keyup", ->
                         filter = $(this).val().toLowerCase()
                         $(this).parents(".pvtFilterBox").find('label span').each ->
-                            testString = this.innerText.toLowerCase().indexOf(filter)
+                            testString = $(this).text().toLowerCase().indexOf(filter)
                             if testString isnt -1
                                 $(this).parent().show()
                             else
