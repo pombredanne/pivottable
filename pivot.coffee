@@ -6,7 +6,7 @@ callWithJQuery = (pivotModule) ->
     # Plain browser env
     else
         pivotModule jQuery
-        
+
 callWithJQuery ($) ->
 
     ###
@@ -23,12 +23,12 @@ callWithJQuery ($) ->
         return x1 + x2
 
     numberFormat = (opts) ->
-        defaults = 
-            digitsAfterDecimal: 2, scaler: 1, 
+        defaults =
+            digitsAfterDecimal: 2, scaler: 1,
             thousandsSep: ",", decimalSep: "."
             prefix: "", suffix: ""
             showZero: false
-        opts = $.extend defaults, opts
+        opts = $.extend({}, defaults, opts)
         (x) ->
             return "" if isNaN(x) or not isFinite(x)
             return "" if x == 0 and not opts.showZero
@@ -47,18 +47,11 @@ callWithJQuery ($) ->
             value: -> @count
             format: formatter
 
-        countUnique: (formatter=usFmtInt) -> ([attr]) -> (data, rowKey, colKey) ->
+        uniques: (fn, formatter=usFmtInt) -> ([attr]) -> (data, rowKey, colKey) ->
             uniq: []
             push: (record) -> @uniq.push(record[attr]) if record[attr] not in @uniq
-            value: -> @uniq.length
+            value: -> fn(@uniq)
             format: formatter
-            numInputs: if attr? then 0 else 1
-
-        listUnique: (sep) -> ([attr]) -> (data, rowKey, colKey)  ->
-            uniq: []
-            push: (record) -> @uniq.push(record[attr]) if record[attr] not in @uniq
-            value: -> @uniq.join sep
-            format: (x) -> x
             numInputs: if attr? then 0 else 1
 
         sum: (formatter=usFmt) -> ([attr]) -> (data, rowKey, colKey) ->
@@ -68,14 +61,52 @@ callWithJQuery ($) ->
             format: formatter
             numInputs: if attr? then 0 else 1
 
-        average:  (formatter=usFmt) -> ([attr]) -> (data, rowKey, colKey) ->
-            sum: 0
-            len: 0
+        extremes: (mode, formatter=usFmt) -> ([attr]) -> (data, rowKey, colKey) ->
+            val: null
+            sorter: getSort(data?.sorters, attr)
             push: (record) ->
-                if not isNaN parseFloat(record[attr])
-                    @sum += parseFloat(record[attr])
-                    @len++
-            value: -> @sum/@len
+                x = record[attr]
+                if mode in ["min", "max"]
+                    x = parseFloat(x)
+                    if not isNaN x then @val = Math[mode](x, @val ? x)
+                if mode == "first" then @val = x if @sorter(x, @val ? x) <= 0
+                if mode == "last"  then @val = x if @sorter(x, @val ? x) >= 0
+            value: -> @val
+            format: (x) -> if isNaN(x) then x else formatter(x)
+            numInputs: if attr? then 0 else 1
+
+        quantile: (q, formatter=usFmt) -> ([attr]) -> (data, rowKey, colKey) ->
+            vals: []
+            push: (record) ->
+                x = parseFloat(record[attr])
+                @vals.push(x) if not isNaN(x)
+            value: ->
+                return null if @vals.length == 0
+                @vals.sort((a,b) -> a-b)
+                i = (@vals.length-1)*q
+                return (@vals[Math.floor(i)] + @vals[Math.ceil(i)])/2.0
+            format: formatter
+            numInputs: if attr? then 0 else 1
+
+        runningStat: (mode="mean", ddof=1, formatter=usFmt) -> ([attr]) -> (data, rowKey, colKey) ->
+            n: 0.0, m: 0.0, s: 0.0
+            push: (record) ->
+                x = parseFloat(record[attr])
+                return if isNaN(x)
+                @n += 1.0
+                if @n == 1.0
+                    @m = x
+                else
+                    m_new = @m + (x - @m)/@n
+                    @s = @s + (x - @m)*(x - m_new)
+                    @m = m_new
+            value: ->
+                if mode == "mean"
+                    return if @n == 0 then 0/0 else @m
+                return 0 if @n <= ddof
+                switch mode
+                    when "var"   then @s/(@n-ddof)
+                    when "stdev" then Math.sqrt(@s/(@n-ddof))
             format: formatter
             numInputs: if attr? then 0 else 1
 
@@ -111,14 +142,32 @@ callWithJQuery ($) ->
             value: -> @inner.value() / data.getAggregator(@selector...).inner.value()
             numInputs: wrapped(x...)().numInputs
 
+    aggregatorTemplates.countUnique = (f) -> aggregatorTemplates.uniques(((x) -> x.length), f)
+    aggregatorTemplates.listUnique =  (s) -> aggregatorTemplates.uniques(((x) -> x.join(s)), ((x)->x))
+    aggregatorTemplates.max =         (f) -> aggregatorTemplates.extremes('max', f)
+    aggregatorTemplates.min =         (f) -> aggregatorTemplates.extremes('min', f)
+    aggregatorTemplates.first =       (f) -> aggregatorTemplates.extremes('first', f)
+    aggregatorTemplates.last =        (f) -> aggregatorTemplates.extremes('last', f)
+    aggregatorTemplates.median =      (f) -> aggregatorTemplates.quantile(0.5, f)
+    aggregatorTemplates.average =     (f) -> aggregatorTemplates.runningStat("mean", 1, f)
+    aggregatorTemplates.var =         (ddof, f) -> aggregatorTemplates.runningStat("var", ddof, f)
+    aggregatorTemplates.stdev =       (ddof, f) -> aggregatorTemplates.runningStat("stdev", ddof, f)
+
     #default aggregators & renderers use US naming and number formatting
-    aggregators = do (tpl = aggregatorTemplates) -> 
+    aggregators = do (tpl = aggregatorTemplates) ->
         "Count":                tpl.count(usFmtInt)
         "Count Unique Values":  tpl.countUnique(usFmtInt)
         "List Unique Values":   tpl.listUnique(", ")
         "Sum":                  tpl.sum(usFmt)
         "Integer Sum":          tpl.sum(usFmtInt)
         "Average":              tpl.average(usFmt)
+        "Median":               tpl.median(usFmt)
+        "Sample Variance":      tpl.var(1, usFmt)
+        "Sample Standard Deviation": tpl.stdev(1, usFmt)
+        "Minimum":              tpl.min(usFmt)
+        "Maximum":              tpl.max(usFmt)
+        "First":                tpl.first(usFmt)
+        "Last":                 tpl.last(usFmt)
         "Sum over Sum":         tpl.sumOverSum(usFmt)
         "80% Upper Bound":      tpl.sumOverSumBound80(true, usFmt)
         "80% Lower Bound":      tpl.sumOverSumBound80(false, usFmt)
@@ -130,24 +179,26 @@ callWithJQuery ($) ->
         "Count as Fraction of Columns": tpl.fractionOf(tpl.count(), "col",   usFmtPct)
 
     renderers =
-        "Table":          (pvtData, opts) ->   pivotTableRenderer(pvtData, opts)
-        "Table Barchart": (pvtData, opts) -> $(pivotTableRenderer(pvtData, opts)).barchart()
-        "Heatmap":        (pvtData, opts) -> $(pivotTableRenderer(pvtData, opts)).heatmap()
-        "Row Heatmap":    (pvtData, opts) -> $(pivotTableRenderer(pvtData, opts)).heatmap("rowheatmap")
-        "Col Heatmap":    (pvtData, opts) -> $(pivotTableRenderer(pvtData, opts)).heatmap("colheatmap")
+        "Table":          (data, opts) ->   pivotTableRenderer(data, opts)
+        "Table Barchart": (data, opts) -> $(pivotTableRenderer(data, opts)).barchart()
+        "Heatmap":        (data, opts) -> $(pivotTableRenderer(data, opts)).heatmap("heatmap",    opts)
+        "Row Heatmap":    (data, opts) -> $(pivotTableRenderer(data, opts)).heatmap("rowheatmap", opts)
+        "Col Heatmap":    (data, opts) -> $(pivotTableRenderer(data, opts)).heatmap("colheatmap", opts)
 
-    locales = 
-        en: 
+    locales =
+        en:
             aggregators: aggregators
             renderers: renderers
-            localeStrings: 
+            localeStrings:
                 renderError: "An error occurred rendering the PivotTable results."
                 computeError: "An error occurred computing the PivotTable results."
                 uiRenderError: "An error occurred rendering the PivotTable UI."
                 selectAll: "Select All"
                 selectNone: "Select None"
                 tooMany: "(too many to list)"
-                filterResults: "Filter results"
+                filterResults: "Filter values"
+                apply: "Apply"
+                cancel: "Cancel"
                 totals: "Totals" #for table renderer
                 vs: "vs" #for gchart renderer
                 by: "by" #for gchart renderer
@@ -159,62 +210,111 @@ callWithJQuery ($) ->
 
     derivers =
         bin: (col, binWidth) -> (record) -> record[col] - record[col] % binWidth
-        dateFormat: (col, formatString, mthNames=mthNamesEn, dayNames=dayNamesEn) ->
+        dateFormat: (col, formatString, utcOutput=false, mthNames=mthNamesEn, dayNames=dayNamesEn) ->
+            utc = if utcOutput then "UTC" else ""
             (record) -> #thanks http://stackoverflow.com/a/12213072/112871
                 date = new Date(Date.parse(record[col]))
                 if isNaN(date) then return ""
                 formatString.replace /%(.)/g, (m, p) ->
                     switch p
-                        when "y" then date.getFullYear()
-                        when "m" then zeroPad(date.getMonth()+1)
-                        when "n" then mthNames[date.getMonth()]
-                        when "d" then zeroPad(date.getDate())
-                        when "w" then dayNames[date.getDay()]
-                        when "x" then date.getDay()
-                        when "H" then zeroPad(date.getHours())
-                        when "M" then zeroPad(date.getMinutes())
-                        when "S" then zeroPad(date.getSeconds())
+                        when "y" then date["get#{utc}FullYear"]()
+                        when "m" then zeroPad(date["get#{utc}Month"]()+1)
+                        when "n" then mthNames[date["get#{utc}Month"]()]
+                        when "d" then zeroPad(date["get#{utc}Date"]())
+                        when "w" then dayNames[date["get#{utc}Day"]()]
+                        when "x" then date["get#{utc}Day"]()
+                        when "H" then zeroPad(date["get#{utc}Hours"]())
+                        when "M" then zeroPad(date["get#{utc}Minutes"]())
+                        when "S" then zeroPad(date["get#{utc}Seconds"]())
                         else "%" + p
 
-    naturalSort = (as, bs) => #thanks http://stackoverflow.com/a/4373421/112871
-        rx = /(\d+)|(\D+)/g
-        rd = /\d/
-        rz = /^0/
-        if typeof as is "number" or typeof bs is "number"
-            return 1  if isNaN(as)
-            return -1  if isNaN(bs)
-            return as - bs
-        a = String(as).toLowerCase()
-        b = String(bs).toLowerCase()
-        return 0  if a is b
-        return (if a > b then 1 else -1)  unless rd.test(a) and rd.test(b)
-        a = a.match(rx)
+    rx = /(\d+)|(\D+)/g
+    rd = /\d/
+    rz = /^0/
+    naturalSort = (as, bs) =>
+        #nulls first
+        return -1 if bs? and not as?
+        return  1 if as? and not bs?
+
+        #then raw NaNs
+        return -1 if typeof as == "number" and isNaN(as)
+        return  1 if typeof bs == "number" and isNaN(bs)
+
+        #numbers and numbery strings group together
+        nas = +as
+        nbs = +bs
+        return -1 if nas < nbs
+        return  1 if nas > nbs
+
+        #within that, true numbers before numbery strings
+        return -1 if typeof as == "number" and typeof bs != "number"
+        return  1 if typeof bs == "number" and typeof as != "number"
+        return  0 if typeof as == "number" and typeof bs == "number"
+
+        # 'Infinity' is a textual number, so less than 'A'
+        return -1 if isNaN(nbs) and not isNaN(nas)
+        return  1 if isNaN(nas) and not isNaN(nbs)
+
+        #finally, "smart" string sorting per http://stackoverflow.com/a/4373421/112871
+        a = String(as)
+        b = String(bs)
+        return 0 if a == b
+        return (if a > b then 1 else -1) unless rd.test(a) and rd.test(b)
+
+        #special treatment for strings containing digits
+        a = a.match(rx) #create digits vs non-digit chunks and iterate through
         b = b.match(rx)
         while a.length and b.length
             a1 = a.shift()
             b1 = b.shift()
-            if a1 isnt b1
-                if rd.test(a1) and rd.test(b1)
+            if a1 != b1
+                if rd.test(a1) and rd.test(b1) #both are digit chunks
                     return a1.replace(rz, ".0") - b1.replace(rz, ".0")
                 else
                     return (if a1 > b1 then 1 else -1)
-        a.length - b.length
+        return a.length - b.length
 
-    #expose these to the outside world
-    $.pivotUtilities = {aggregatorTemplates, aggregators, renderers, derivers, locales,
-        naturalSort, numberFormat}
+    sortAs = (order) ->
+        mapping = {}
+        l_mapping = {} # sort lowercased keys similarly
+        for i, x of order
+            mapping[x] = i
+            l_mapping[x.toLowerCase()] = i if typeof x == "string"
+        (a, b) ->
+            if mapping[a]? and mapping[b]? then mapping[a] - mapping[b]
+            else if mapping[a]? then -1
+            else if mapping[b]? then 1
+            else if l_mapping[a]? and l_mapping[b]? then l_mapping[a] - l_mapping[b]
+            else if l_mapping[a]? then -1
+            else if l_mapping[b]? then 1
+            else naturalSort(a,b)
+
+    getSort = (sorters, attr) ->
+        if sorters?
+            if $.isFunction(sorters)
+                sort = sorters(attr)
+                return sort if $.isFunction(sort)
+            else if sorters[attr]?
+                return sorters[attr]
+        return naturalSort
 
     ###
     Data Model class
     ###
 
     class PivotData
-        constructor: (input, opts) ->
-            @aggregator = opts.aggregator
-            @aggregatorName = opts.aggregatorName
-            @colAttrs = opts.cols
-            @rowAttrs = opts.rows
-            @valAttrs = opts.vals
+        constructor: (input, opts = {}) ->
+            @input = input
+            @aggregator = opts.aggregator ? aggregatorTemplates.count()()
+            @aggregatorName = opts.aggregatorName ? "Count"
+            @colAttrs = opts.cols ? []
+            @rowAttrs = opts.rows ? []
+            @valAttrs = opts.vals ? []
+            @sorters = opts.sorters ? {}
+            @rowOrder = opts.rowOrder ? "key_a_to_z"
+            @colOrder = opts.colOrder ? "key_a_to_z"
+            @derivedAttributes = opts.derivedAttributes ? {}
+            @filter = opts.filter ? (-> true)
             @tree = {}
             @rowKeys = []
             @colKeys = []
@@ -224,15 +324,15 @@ callWithJQuery ($) ->
             @sorted = false
 
             # iterate through input, accumulating data for cells
-            PivotData.forEachRecord input, opts.derivedAttributes, (record) =>
-                @processRecord(record) if opts.filter(record)
+            PivotData.forEachRecord @input, @derivedAttributes, (record) =>
+                @processRecord(record) if @filter(record)
 
         #can handle arrays or jQuery selections of tables
         @forEachRecord = (input, derivedAttributes, f) ->
             if $.isEmptyObject derivedAttributes
                 addRecord = f
             else
-                addRecord = (record) -> 
+                addRecord = (record) ->
                     record[k] = v(record) ? record[k] for k, v of derivedAttributes
                     f(record)
 
@@ -257,21 +357,33 @@ callWithJQuery ($) ->
             else
                 throw new Error("unknown input format")
 
-        #converts to [{attr:val, attr:val},{attr:val, attr:val}] using method above
-        @convertToArray = (input) ->
-            result = []
-            PivotData.forEachRecord input, {}, (record) -> result.push record
-            return result
+        forEachMatchingRecord: (criteria, callback) ->
+            PivotData.forEachRecord @input, @derivedAttributes, (record) =>
+                return if not @filter(record)
+                for k, v of criteria
+                    return if v != (record[k] ? "null")
+                callback(record)
 
-        natSort: (as, bs) => naturalSort(as, bs)
-
-        arrSort: (a,b) => @natSort a.join(), b.join()
+        arrSort: (attrs) =>
+            sortersArr = (getSort(@sorters, a) for a in attrs)
+            (a,b) ->
+                for own i, sorter of sortersArr
+                    comparison = sorter(a[i], b[i])
+                    return comparison if comparison != 0
+                return 0
 
         sortKeys: () =>
             if not @sorted
-                @rowKeys.sort @arrSort
-                @colKeys.sort @arrSort
-            @sorted = true
+                @sorted = true
+                v = (r,c) => @getAggregator(r,c).value()
+                switch @rowOrder
+                    when "value_a_to_z"  then @rowKeys.sort (a,b) =>  naturalSort v(a,[]), v(b,[])
+                    when "value_z_to_a" then @rowKeys.sort (a,b) => -naturalSort v(a,[]), v(b,[])
+                    else             @rowKeys.sort @arrSort(@rowAttrs)
+                switch @colOrder
+                    when "value_a_to_z"  then @colKeys.sort (a,b) =>  naturalSort v([],a), v([],b)
+                    when "value_z_to_a" then @colKeys.sort (a,b) => -naturalSort v([],a), v([],b)
+                    else             @colKeys.sort @arrSort(@colAttrs)
 
         getColKeys: () =>
             @sortKeys()
@@ -284,7 +396,7 @@ callWithJQuery ($) ->
         processRecord: (record) -> #this code is called in a tight loop
             colKey = []
             rowKey = []
-            colKey.push record[x] ? "null" for x in @colAttrs 
+            colKey.push record[x] ? "null" for x in @colAttrs
             rowKey.push record[x] ? "null" for x in @rowAttrs
             flatRowKey = rowKey.join(String.fromCharCode(0))
             flatColKey = colKey.join(String.fromCharCode(0))
@@ -323,6 +435,10 @@ callWithJQuery ($) ->
                 agg = @tree[flatRowKey][flatColKey]
             return agg ? {value: (-> null), format: -> ""}
 
+    #expose these to the outside world
+    $.pivotUtilities = {aggregatorTemplates, aggregators, renderers, derivers, locales,
+        naturalSort, numberFormat, sortAs, PivotData}
+
     ###
     Default Renderer for hierarchical table layout
     ###
@@ -330,15 +446,22 @@ callWithJQuery ($) ->
     pivotTableRenderer = (pivotData, opts) ->
 
         defaults =
-            localeStrings:
-                totals: "Totals"
+            table: clickCallback: null
+            localeStrings: totals: "Totals"
 
-        opts = $.extend defaults, opts
+        opts = $.extend(true, {}, defaults, opts)
 
         colAttrs = pivotData.colAttrs
         rowAttrs = pivotData.rowAttrs
         rowKeys = pivotData.getRowKeys()
         colKeys = pivotData.getColKeys()
+
+        if opts.table.clickCallback
+            getClickHandler = (value, rowValues, colValues) ->
+                filters = {}
+                filters[attr] = colValues[i] for own i, attr of colAttrs when colValues[i]?
+                filters[attr] = rowValues[i] for own i, attr of rowAttrs when rowValues[i]?
+                return (e) -> opts.table.clickCallback(e, value, filters, pivotData)
 
         #now actually build the output
         result = document.createElement("table")
@@ -363,6 +486,7 @@ callWithJQuery ($) ->
             return len
 
         #the first few rows are for col headers
+        thead = document.createElement("thead")
         for own j, c of colAttrs
             tr = document.createElement("tr")
             if parseInt(j) == 0 and rowAttrs.length != 0
@@ -390,7 +514,7 @@ callWithJQuery ($) ->
                 th.innerHTML = opts.localeStrings.totals
                 th.setAttribute("rowspan", colAttrs.length + (if rowAttrs.length ==0 then 0 else 1))
                 tr.appendChild th
-            result.appendChild tr
+            thead.appendChild tr
 
         #then a row for row header headers
         if rowAttrs.length !=0
@@ -399,15 +523,17 @@ callWithJQuery ($) ->
                 th = document.createElement("th")
                 th.className = "pvtAxisLabel"
                 th.textContent = r
-                tr.appendChild th 
+                tr.appendChild th
             th = document.createElement("th")
             if colAttrs.length ==0
                 th.className = "pvtTotalLabel"
                 th.innerHTML = opts.localeStrings.totals
             tr.appendChild th
-            result.appendChild tr
+            thead.appendChild tr
+        result.appendChild thead
 
         #now the actual data rows, with their row headers and totals
+        tbody = document.createElement("tbody")
         for own i, rowKey of rowKeys
             tr = document.createElement("tr")
             for own j, txt of rowKey
@@ -425,19 +551,23 @@ callWithJQuery ($) ->
                 val = aggregator.value()
                 td = document.createElement("td")
                 td.className = "pvtVal row#{i} col#{j}"
-                td.innerHTML = aggregator.format(val)
+                td.textContent = aggregator.format(val)
                 td.setAttribute("data-value", val)
+                if getClickHandler?
+                    td.onclick = getClickHandler(val, rowKey, colKey)
                 tr.appendChild td
 
             totalAggregator = pivotData.getAggregator(rowKey, [])
             val = totalAggregator.value()
             td = document.createElement("td")
             td.className = "pvtTotal rowTotal"
-            td.innerHTML = totalAggregator.format(val)
+            td.textContent = totalAggregator.format(val)
             td.setAttribute("data-value", val)
+            if getClickHandler?
+                td.onclick = getClickHandler(val, rowKey, [])
             td.setAttribute("data-for", "row"+i)
             tr.appendChild td
-            result.appendChild tr
+            tbody.appendChild tr
 
         #finally, the row for col totals, and a grand total
         tr = document.createElement("tr")
@@ -451,18 +581,23 @@ callWithJQuery ($) ->
             val = totalAggregator.value()
             td = document.createElement("td")
             td.className = "pvtTotal colTotal"
-            td.innerHTML = totalAggregator.format(val)
+            td.textContent = totalAggregator.format(val)
             td.setAttribute("data-value", val)
+            if getClickHandler?
+                td.onclick = getClickHandler(val, [], colKey)
             td.setAttribute("data-for", "col"+j)
             tr.appendChild td
         totalAggregator = pivotData.getAggregator([], [])
         val = totalAggregator.value()
         td = document.createElement("td")
         td.className = "pvtGrandTotal"
-        td.innerHTML = totalAggregator.format(val)
+        td.textContent = totalAggregator.format(val)
         td.setAttribute("data-value", val)
+        if getClickHandler?
+            td.onclick = getClickHandler(val, [], [])
         tr.appendChild td
-        result.appendChild tr
+        tbody.appendChild tr
+        result.appendChild tbody
 
         #squirrel this away for later
         result.setAttribute("data-numrows", rowKeys.length)
@@ -474,23 +609,29 @@ callWithJQuery ($) ->
     Pivot Table core: create PivotData object and call Renderer on it
     ###
 
-    $.fn.pivot = (input, opts) ->
+    $.fn.pivot = (input, inputOpts, locale="en") ->
+        locale = "en" if not locales[locale]?
         defaults =
-            cols : []
-            rows: []
+            cols : [], rows: [], vals: []
+            rowOrder: "key_a_to_z", colOrder: "key_a_to_z"
+            dataClass: PivotData
             filter: -> true
             aggregator: aggregatorTemplates.count()()
             aggregatorName: "Count"
-            derivedAttributes: {},
+            sorters: {}
+            derivedAttributes: {}
             renderer: pivotTableRenderer
-            rendererOptions: null
-            localeStrings: locales.en.localeStrings
 
-        opts = $.extend defaults, opts
+        localeStrings = $.extend(true, {}, locales.en.localeStrings, locales[locale].localeStrings)
+        localeDefaults =
+            rendererOptions: {localeStrings}
+            localeStrings: localeStrings
+
+        opts = $.extend(true, {}, localeDefaults, $.extend({}, defaults, inputOpts))
 
         result = null
         try
-            pivotData = new PivotData(input, opts)
+            pivotData = new opts.dataClass(input, opts)
             try
                 result = opts.renderer(pivotData, opts.rendererOptions)
             catch e
@@ -499,7 +640,7 @@ callWithJQuery ($) ->
         catch e
             console.error(e.stack) if console?
             result = $("<span>").html opts.localeStrings.computeError
-        
+
         x = this[0]
         x.removeChild(x.lastChild) while x.hasChildNodes()
         return @append result
@@ -510,50 +651,63 @@ callWithJQuery ($) ->
     ###
 
     $.fn.pivotUI = (input, inputOpts, overwrite = false, locale="en") ->
+        locale = "en" if not locales[locale]?
         defaults =
             derivedAttributes: {}
             aggregators: locales[locale].aggregators
             renderers: locales[locale].renderers
             hiddenAttributes: []
-            menuLimit: 200
+            menuLimit: 500
             cols: [], rows: [], vals: []
+            rowOrder: "key_a_to_z", colOrder: "key_a_to_z"
+            dataClass: PivotData
             exclusions: {}
-            unusedAttrsVertical: "auto"
+            inclusions: {}
+            unusedAttrsVertical: 85
             autoSortUnusedAttrs: false
-            rendererOptions: localeStrings: locales[locale].localeStrings
             onRefresh: null
             filter: -> true
-            localeStrings: locales[locale].localeStrings
+            sorters: {}
+
+        localeStrings = $.extend(true, {}, locales.en.localeStrings, locales[locale].localeStrings)
+        localeDefaults =
+            rendererOptions: {localeStrings}
+            localeStrings: localeStrings
 
         existingOpts = @data "pivotUIOptions"
         if not existingOpts? or overwrite
-            opts = $.extend defaults, inputOpts
+            opts = $.extend(true, {}, localeDefaults, $.extend({}, defaults, inputOpts))
         else
             opts = existingOpts
 
         try
-            #cache the input in some useful form
-            input = PivotData.convertToArray(input)
-            tblCols = (k for own k of input[0])
-            tblCols.push c for own c of opts.derivedAttributes when (c not in tblCols)
-
-            #figure out the cardinality and some stats
-            axisValues = {}
-            axisValues[x] = {} for x in tblCols
-
+            # do a first pass on the data to cache a materialized copy of any
+            # function-valued inputs and to compute dimension cardinalities
+            attrValues = {}
+            materializedInput = []
+            recordsProcessed = 0
             PivotData.forEachRecord input, opts.derivedAttributes, (record) ->
-                for own k, v of record when opts.filter(record)
-                    v ?= "null"
-                    axisValues[k][v] ?= 0
-                    axisValues[k][v]++
+                return unless opts.filter(record)
+                materializedInput.push(record)
+                for own attr of record
+                    if not attrValues[attr]?
+                        attrValues[attr] = {}
+                        if recordsProcessed > 0
+                            attrValues[attr]["null"] = recordsProcessed
+                for attr of attrValues
+                    value = record[attr] ? "null"
+                    attrValues[attr][value] ?= 0
+                    attrValues[attr][value]++
+                recordsProcessed++
 
             #start building the output
-            uiTable = $("<table cellpadding='5'>")
+            uiTable = $("<table>", "class": "pvtUi").attr("cellpadding", 5)
 
             #renderer control
             rendererControl = $("<td>")
 
-            renderer = $("<select class='pvtRenderer'>")
+            renderer = $("<select>")
+                .addClass('pvtRenderer')
                 .appendTo(rendererControl)
                 .bind "change", -> refresh() #capture reference
             for own x of opts.renderers
@@ -561,118 +715,193 @@ callWithJQuery ($) ->
 
 
             #axis list, including the double-click menu
-            colList = $("<td class='pvtAxisContainer pvtUnused'>")
-            shownAttributes = (c for c in tblCols when c not in opts.hiddenAttributes)
+            unused = $("<td>").addClass('pvtAxisContainer pvtUnused')
+            shownAttributes = (a for a of attrValues when a not in opts.hiddenAttributes)
 
             unusedAttrsVerticalAutoOverride = false
             if opts.unusedAttrsVertical == "auto"
+                unusedAttrsVerticalAutoCutoff = 120 # legacy support
+            else
+                unusedAttrsVerticalAutoCutoff = parseInt opts.unusedAttrsVertical
+
+            if not isNaN(unusedAttrsVerticalAutoCutoff)
                 attrLength = 0
                 attrLength += a.length for a in shownAttributes
-                unusedAttrsVerticalAutoOverride = attrLength > 120
+                unusedAttrsVerticalAutoOverride = attrLength > unusedAttrsVerticalAutoCutoff
 
             if opts.unusedAttrsVertical == true or unusedAttrsVerticalAutoOverride
-                colList.addClass('pvtVertList')
+                unused.addClass('pvtVertList')
             else
-                colList.addClass('pvtHorizList')
+                unused.addClass('pvtHorizList')
 
-            for i, c of shownAttributes
-                do (c) ->
-                    keys = (k for k of axisValues[c])
+            for own i, attr of shownAttributes
+                do (attr) ->
+                    values = (v for v of attrValues[attr])
                     hasExcludedItem = false
                     valueList = $("<div>").addClass('pvtFilterBox').hide()
 
-                    valueList.append $("<h4>").text("#{c} (#{keys.length})")
-                    if keys.length > opts.menuLimit
+                    valueList.append $("<h4>").append(
+                        $("<span>").text(attr),
+                        $("<span>").addClass("count").text("(#{values.length})"),
+                        )
+                    if values.length > opts.menuLimit
                         valueList.append $("<p>").html(opts.localeStrings.tooMany)
                     else
-                        btns = $("<p>").appendTo(valueList)
-                        btns.append $("<button>").html(opts.localeStrings.selectAll).bind "click", ->
-                            valueList.find("input:visible").prop "checked", true
-                        btns.append $("<button>").html(opts.localeStrings.selectNone).bind "click", ->
-                            valueList.find("input:visible").prop "checked", false
-                        btns.append $("<input>").addClass("pvtSearch").attr("placeholder", opts.localeStrings.filterResults).bind "keyup", ->
-                            filter = $(this).val().toLowerCase()
-                            $(this).parents(".pvtFilterBox").find('label span').each ->
-                                testString = $(this).text().toLowerCase().indexOf(filter)
-                                if testString isnt -1
-                                    $(this).parent().show()
-                                else
-                                    $(this).parent().hide()
+                        if values.length > 5
+                            controls = $("<p>").appendTo(valueList)
+                            sorter = getSort(opts.sorters, attr)
+                            placeholder = opts.localeStrings.filterResults
+                            $("<input>", {type: "text"}).appendTo(controls)
+                                .attr({placeholder: placeholder, class: "pvtSearch"})
+                                .bind "keyup", ->
+                                    filter = $(this).val().toLowerCase().trim()
+                                    accept_gen = (prefix, accepted) -> (v) ->
+                                        real_filter = filter.substring(prefix.length).trim()
+                                        return true if real_filter.length == 0
+                                        return Math.sign(sorter(v.toLowerCase(), real_filter)) in accepted
+                                    accept =
+                                        if      filter.startsWith(">=") then accept_gen(">=", [1,0])
+                                        else if filter.startsWith("<=") then accept_gen("<=", [-1,0])
+                                        else if filter.startsWith(">")  then accept_gen(">",  [1])
+                                        else if filter.startsWith("<")  then accept_gen("<",  [-1])
+                                        else if filter.startsWith("~")  then (v) ->
+                                                return true if filter.substring(1).trim().length == 0
+                                                v.toLowerCase().match(filter.substring(1))
+                                        else (v) -> v.toLowerCase().indexOf(filter) != -1
+
+                                    valueList.find('.pvtCheckContainer p label span.value').each ->
+                                        if accept($(this).text())
+                                            $(this).parent().parent().show()
+                                        else
+                                            $(this).parent().parent().hide()
+                            controls.append $("<br>")
+                            $("<button>", {type:"button"}).appendTo(controls)
+                                .html(opts.localeStrings.selectAll)
+                                .bind "click", ->
+                                    valueList.find("input:visible:not(:checked)")
+                                        .prop("checked", true).toggleClass("changed")
+                                    return false
+                            $("<button>", {type:"button"}).appendTo(controls)
+                                .html(opts.localeStrings.selectNone)
+                                .bind "click", ->
+                                    valueList.find("input:visible:checked")
+                                        .prop("checked", false).toggleClass("changed")
+                                    return false
 
                         checkContainer = $("<div>").addClass("pvtCheckContainer").appendTo(valueList)
 
-                        for k in keys.sort(naturalSort)
-                             v = axisValues[c][k]
+                        for value in values.sort(getSort(opts.sorters, attr))
+                             valueCount = attrValues[attr][value]
                              filterItem = $("<label>")
-                             filterItemExcluded = if opts.exclusions[c] then (k in opts.exclusions[c]) else false
+                             filterItemExcluded = false
+                             if opts.inclusions[attr]
+                                filterItemExcluded = (value not in opts.inclusions[attr])
+                             else if opts.exclusions[attr]
+                                filterItemExcluded = (value in opts.exclusions[attr])
                              hasExcludedItem ||= filterItemExcluded
-                             $("<input type='checkbox' class='pvtFilter'>")
-                                .attr("checked", !filterItemExcluded).data("filter", [c,k])
-                                .appendTo filterItem
-                             filterItem.append $("<span>").text "#{k} (#{v})"
+                             $("<input>")
+                                .attr("type", "checkbox").addClass('pvtFilter')
+                                .attr("checked", !filterItemExcluded).data("filter", [attr,value])
+                                .appendTo(filterItem)
+                                .bind "change", -> $(this).toggleClass("changed")
+                             filterItem.append $("<span>").addClass("value").text(value)
+                             filterItem.append $("<span>").addClass("count").text("("+valueCount+")")
                              checkContainer.append $("<p>").append(filterItem)
 
-                    updateFilter = ->
-                        unselectedCount = $(valueList).find("[type='checkbox']").length -
-                                          $(valueList).find("[type='checkbox']:checked").length
-                        if unselectedCount > 0
-                            attrElem.addClass "pvtFilteredAttribute"
-                        else
-                            attrElem.removeClass "pvtFilteredAttribute"
-                        if keys.length > opts.menuLimit
-                            valueList.toggle()
-                        else
-                            valueList.toggle(0, refresh)
+                    closeFilterBox = ->
+                        if valueList.find("[type='checkbox']").length >
+                               valueList.find("[type='checkbox']:checked").length
+                                attrElem.addClass "pvtFilteredAttribute"
+                            else
+                                attrElem.removeClass "pvtFilteredAttribute"
 
-                    $("<p>").appendTo(valueList)
-                        .append $("<button>").text("OK").bind "click", updateFilter
+                            valueList.find('.pvtSearch').val('')
+                            valueList.find('.pvtCheckContainer p').show()
+                            valueList.hide()
 
-                    showFilterList = (e) ->
-                        valueList.css(left: e.pageX, top: e.pageY).toggle()
-                        $('.pvtSearch').val('')
-                        $('label').show()
+                    finalButtons = $("<p>").appendTo(valueList)
 
-                    triangleLink = $("<span class='pvtTriangle'>").html(" &#x25BE;")
-                        .bind "click", showFilterList
+                    if values.length <= opts.menuLimit
+                        $("<button>", {type: "button"}).text(opts.localeStrings.apply)
+                            .appendTo(finalButtons).bind "click", ->
+                                if valueList.find(".changed").removeClass("changed").length
+                                    refresh()
+                                closeFilterBox()
 
-                    attrElem = $("<li class='axis_#{i}'>")
-                        .append $("<span class='pvtAttr'>").text(c).data("attrName", c).append(triangleLink)
+                    $("<button>", {type: "button"}).text(opts.localeStrings.cancel)
+                        .appendTo(finalButtons).bind "click", ->
+                            valueList.find(".changed:checked")
+                                .removeClass("changed").prop("checked", false)
+                            valueList.find(".changed:not(:checked)")
+                                .removeClass("changed").prop("checked", true)
+                            closeFilterBox()
+
+                    triangleLink = $("<span>").addClass('pvtTriangle')
+                        .html(" &#x25BE;").bind "click", (e) ->
+                            {left, top} = $(e.currentTarget).position()
+                            valueList.css(left: left+10, top: top+10).show()
+
+                    attrElem = $("<li>").addClass("axis_#{i}")
+                        .append $("<span>").addClass('pvtAttr').text(attr).data("attrName", attr).append(triangleLink)
+
                     attrElem.addClass('pvtFilteredAttribute') if hasExcludedItem
-                    colList.append(attrElem).append(valueList)
-
-                    attrElem.bind "dblclick", showFilterList
+                    unused.append(attrElem).append(valueList)
 
             tr1 = $("<tr>").appendTo(uiTable)
 
             #aggregator menu and value area
 
-            aggregator = $("<select class='pvtAggregator'>")
+            aggregator = $("<select>").addClass('pvtAggregator')
                 .bind "change", -> refresh() #capture reference
             for own x of opts.aggregators
                 aggregator.append $("<option>").val(x).html(x)
 
-            $("<td class='pvtVals'>")
+            ordering =
+                key_a_to_z:   {rowSymbol: "&varr;", colSymbol: "&harr;", next: "value_a_to_z"}
+                value_a_to_z: {rowSymbol: "&darr;", colSymbol: "&rarr;", next: "value_z_to_a"}
+                value_z_to_a: {rowSymbol: "&uarr;", colSymbol: "&larr;", next: "key_a_to_z"}
+
+            rowOrderArrow = $("<a>", role: "button").addClass("pvtRowOrder")
+                .data("order", opts.rowOrder).html(ordering[opts.rowOrder].rowSymbol)
+                .bind "click", ->
+                    $(this).data("order", ordering[$(this).data("order")].next)
+                    $(this).html(ordering[$(this).data("order")].rowSymbol)
+                    refresh()
+
+            colOrderArrow = $("<a>", role: "button").addClass("pvtColOrder")
+                .data("order", opts.colOrder).html(ordering[opts.colOrder].colSymbol)
+                .bind "click", ->
+                    $(this).data("order", ordering[$(this).data("order")].next)
+                    $(this).html(ordering[$(this).data("order")].colSymbol)
+                    refresh()
+
+            $("<td>").addClass('pvtVals')
               .appendTo(tr1)
               .append(aggregator)
+              .append(rowOrderArrow)
+              .append(colOrderArrow)
               .append($("<br>"))
 
             #column axes
-            $("<td class='pvtAxisContainer pvtHorizList pvtCols'>").appendTo(tr1)
+            $("<td>").addClass('pvtAxisContainer pvtHorizList pvtCols').appendTo(tr1)
 
             tr2 = $("<tr>").appendTo(uiTable)
 
             #row axes
-            tr2.append $("<td valign='top' class='pvtAxisContainer pvtRows'>")
+            tr2.append $("<td>").addClass('pvtAxisContainer pvtRows').attr("valign", "top")
 
             #the actual pivot table container
-            pivotTable = $("<td valign='top' class='pvtRendererArea'>").appendTo(tr2)
+            pivotTable = $("<td>")
+                .attr("valign", "top")
+                .addClass('pvtRendererArea')
+                .appendTo(tr2)
 
             #finally the renderer dropdown and unused attribs are inserted at the requested location
             if opts.unusedAttrsVertical == true or unusedAttrsVerticalAutoOverride
                 uiTable.find('tr:nth-child(1)').prepend rendererControl
-                uiTable.find('tr:nth-child(2)').prepend colList
+                uiTable.find('tr:nth-child(2)').prepend unused
             else
-                uiTable.prepend $("<tr>").append(rendererControl).append(colList)
+                uiTable.prepend $("<tr>").append(rendererControl).append(unused)
 
             #render the UI in its default state
             @html uiTable
@@ -680,9 +909,9 @@ callWithJQuery ($) ->
             #set up the UI initial state as requested by moving elements around
 
             for x in opts.cols
-                @find(".pvtCols").append @find(".axis_#{shownAttributes.indexOf(x)}")
+                @find(".pvtCols").append @find(".axis_#{$.inArray(x, shownAttributes)}")
             for x in opts.rows
-                @find(".pvtRows").append @find(".axis_#{shownAttributes.indexOf(x)}")
+                @find(".pvtRows").append @find(".axis_#{$.inArray(x, shownAttributes)}")
             if opts.aggregatorName?
                 @find(".pvtAggregator").val opts.aggregatorName
             if opts.rendererName?
@@ -696,7 +925,9 @@ callWithJQuery ($) ->
                     derivedAttributes: opts.derivedAttributes
                     localeStrings: opts.localeStrings
                     rendererOptions: opts.rendererOptions
+                    sorters: opts.sorters
                     cols: [], rows: []
+                    dataClass: opts.dataClass
 
                 numInputsToProcess = opts.aggregators[aggregator.val()]([])().numInputs ? 0
                 vals = []
@@ -712,7 +943,8 @@ callWithJQuery ($) ->
                 if numInputsToProcess != 0
                     pvtVals = @find(".pvtVals")
                     for x in [0...numInputsToProcess]
-                        newDropdown = $("<select class='pvtAttrDropdown'>")
+                        newDropdown = $("<select>")
+                            .addClass('pvtAttrDropdown')
                             .append($("<option>"))
                             .bind "change", -> refresh()
                         for attr in shownAttributes
@@ -731,7 +963,8 @@ callWithJQuery ($) ->
                 subopts.vals = vals
                 subopts.aggregator = opts.aggregators[aggregator.val()](vals)
                 subopts.renderer = opts.renderers[renderer.val()]
-
+                subopts.rowOrder = rowOrderArrow.data("order")
+                subopts.colOrder = colOrderArrow.data("order")
                 #construct filter here
                 exclusions = {}
                 @find('input.pvtFilter').not(':checked').each ->
@@ -740,19 +973,32 @@ callWithJQuery ($) ->
                         exclusions[filter[0]].push( filter[1] )
                     else
                         exclusions[filter[0]] = [ filter[1] ]
+                #include inclusions when exclusions present
+                inclusions = {}
+                @find('input.pvtFilter:checked').each ->
+                    filter = $(this).data("filter")
+                    if exclusions[filter[0]]?
+                        if inclusions[filter[0]]?
+                            inclusions[filter[0]].push( filter[1] )
+                        else
+                            inclusions[filter[0]] = [ filter[1] ]
 
                 subopts.filter = (record) ->
                     return false if not opts.filter(record)
                     for k,excludedItems of exclusions
-                        return false if ""+record[k] in excludedItems
+                        return false if ""+(record[k] ? 'null') in excludedItems
                     return true
 
-                pivotTable.pivot(input,subopts)
-                pivotUIOptions = $.extend opts,
+                pivotTable.pivot(materializedInput,subopts)
+                pivotUIOptions = $.extend {}, opts,
                     cols: subopts.cols
                     rows: subopts.rows
+                    colOrder: subopts.colOrder
+                    rowOrder: subopts.rowOrder
                     vals: vals
                     exclusions: exclusions
+                    inclusions: inclusions
+                    inclusionsInfo: inclusions #duplicated for backwards-compatibility
                     aggregatorName: aggregator.val()
                     rendererName: renderer.val()
 
@@ -760,10 +1006,9 @@ callWithJQuery ($) ->
 
                 # if requested make sure unused columns are in alphabetical order
                 if opts.autoSortUnusedAttrs
-                    natSort = $.pivotUtilities.naturalSort
                     unusedAttrsContainer = @find("td.pvtUnused.pvtAxisContainer")
                     $(unusedAttrsContainer).children("li")
-                        .sort((a, b) => natSort($(a).text(), $(b).text()))
+                        .sort((a, b) => naturalSort($(a).text(), $(b).text()))
                         .appendTo unusedAttrsContainer
 
                 pivotTable.css("opacity", 1)
@@ -790,23 +1035,21 @@ callWithJQuery ($) ->
     Heatmap post-processing
     ###
 
-    $.fn.heatmap = (scope = "heatmap") ->
+    $.fn.heatmap = (scope = "heatmap", opts) ->
         numRows = @data "numrows"
         numCols = @data "numcols"
 
-        colorGen = (color, min, max) ->
-            hexGen = switch color
-                when "red"   then (hex) -> "ff#{hex}#{hex}"
-                when "green" then (hex) -> "#{hex}ff#{hex}"
-                when "blue"  then (hex) -> "#{hex}#{hex}ff"
-
+        # given a series of values
+        # must return a function to map a given value to a CSS color
+        colorScaleGenerator = opts?.heatmap?.colorScaleGenerator
+        colorScaleGenerator ?= (values) ->
+            min = Math.min(values...)
+            max = Math.max(values...)
             return (x) ->
-                intensity = 255 - Math.round 255*(x-min)/(max-min)
-                hex = intensity.toString(16).split(".")[0]
-                hex = 0+hex if hex.length == 1
-                return hexGen(hex)
+                nonRed = 255 - Math.round 255*(x-min)/(max-min)
+                return "rgb(255,#{nonRed},#{nonRed})"
 
-        heatmapper = (scope, color) =>
+        heatmapper = (scope) =>
             forEachCell = (f) =>
                 @find(scope).each ->
                     x = $(this).data("value")
@@ -814,19 +1057,16 @@ callWithJQuery ($) ->
 
             values = []
             forEachCell (x) -> values.push x
-            colorFor = colorGen color, Math.min(values...), Math.max(values...)
-            forEachCell (x, elem) -> elem.css "background-color", "#" + colorFor(x)
+            colorScale = colorScaleGenerator(values)
+            forEachCell (x, elem) -> elem.css "background-color", colorScale(x)
 
         switch scope
-            when "heatmap"
-                heatmapper ".pvtVal", "red"
-            when "rowheatmap"
-                heatmapper ".pvtVal.row#{i}", "red" for i in [0...numRows]
-            when "colheatmap"
-                heatmapper ".pvtVal.col#{j}", "red" for j in [0...numCols]
+            when "heatmap"    then heatmapper ".pvtVal"
+            when "rowheatmap" then heatmapper ".pvtVal.row#{i}" for i in [0...numRows]
+            when "colheatmap" then heatmapper ".pvtVal.col#{j}" for j in [0...numCols]
 
-        heatmapper ".pvtTotal.rowTotal", "red"
-        heatmapper ".pvtTotal.colTotal", "red"
+        heatmapper ".pvtTotal.rowTotal"
+        heatmapper ".pvtTotal.colTotal"
 
         return this
 
@@ -871,5 +1111,3 @@ callWithJQuery ($) ->
         barcharter ".pvtTotal.colTotal"
 
         return this
-
-
