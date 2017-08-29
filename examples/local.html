@@ -2,7 +2,16 @@
 <html>
     <head>
         <title>Pivot Demo From Local CSV</title>
-        <script>  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)  })(window,document,'script','//www.google-analytics.com/analytics.js','ga');  ga('create', 'UA-46914903-1', 'kruchten.com');  ga('send', 'pageview');</script>
+        <script>
+          (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+          (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+          m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+          })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+          ga('create', 'UA-46914903-2', 'auto');
+          ga('send', 'pageview');
+
+        </script>
         <!-- external libs from cdnjs -->
         <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/c3/0.4.11/c3.min.css">
 
@@ -65,7 +74,7 @@
                     $("#output").html("<p align='center' style='color:grey;'>(processing...)</p>")
                     Papa.parse(f, {
                         skipEmptyLines: true,
-                        error: function(e){ alert(e)},
+                        error: function(e){ alert(e) },
                         complete: function(parsed){
                             $("#output").pivotUI(parsed.data, { renderers: renderers }, true);
                         }
@@ -74,6 +83,10 @@
 
                 $("#csv").bind("change", function(event){
                     parseAndPivot(event.target.files[0]);
+                });
+
+                $("#textarea").bind("input change", function(){
+                    parseAndPivot($("#textarea").val());
                 });
 
                 var dragging = function(evt) {
@@ -106,7 +119,15 @@
              });
         </script>
         <p><a href="index.html">&laquo; back to PivotTable.js examples</a></p>
-        <p align="center" style="line-height: 1.5">Drop a CSV file on this page or <label id="filechooser">click here to choose one<input id="csv" type="file" style="display:none"/></label><br /> <em><small>note: the data never leaves your browser!</small></em></p>
+        <p align="center" style="line-height: 1.5">
+            Drop a CSV file on this page or
+            <label id="filechooser">click here to choose one<input id="csv" type="file" style="display:none"/></label>
+            <br /><br />
+            <textarea placeholder="or type or paste CSV text here" style="width: 300px;" id="textarea"></textarea>
+            <br />
+            <em><small>note: the data never leaves your browser!</small></em>
+        </p>
+
         <div id="output" style="margin: 10px;"></div>
 
     </body>
